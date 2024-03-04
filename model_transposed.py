@@ -1,10 +1,15 @@
 """
-Full definition of a GPT Language Model, all of it in this single file.
-References:
-1) the official GPT-2 TensorFlow implementation released by OpenAI:
-https://github.com/openai/gpt-2/blob/master/src/model.py
-2) huggingface/transformers PyTorch implementation:
-https://github.com/huggingface/transformers/blob/main/src/transformers/models/gpt2/modeling_gpt2.py
+Transposed Transformer -- an invention of Professor Phillip Isola (MIT)
+
+Normally transformers share weights across the context window.
+What if we shared weights across depth instead? What could we learn?
+
+The transposed transformer can stack more layers than it trained with,
+just as normal transformers can read more context than they trained with.
+
+It's something like a mixture of experts, governed by attention.
+
+What are the scaling laws? What are the dynamics?
 """
 
 import math
@@ -95,11 +100,11 @@ class MLP(nn.Module):
 
 @dataclass
 class TTConfig:
-    block_size: int = 32    # fixed context window -- cannot be modified due to weight sharing across depth!
+    block_size: int = 8     # fixed context window -- cannot be modified due to weight sharing across depth!
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-    n_layer: int = 6        # number of layers is variable due to weight sharing across depth!
+    n_layer: int = 4        # number of layers is variable due to weight sharing across depth!
     n_head: int = 8
-    n_embd: int = 384
+    n_embd: int = 64*3
     dropout: float = 0.0
     bias: bool = False # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
 
@@ -117,6 +122,8 @@ class TT(nn.Module):
             drop = nn.Dropout(config.dropout),
             positionwise_mlps = nn.ModuleList([MLP(config) for _ in range(config.block_size)]),
             positionwise_attentions = nn.ModuleList([CausalSelfAttention(config) for _ in range(config.block_size)]),
+            positionwise_norm1s = nn.ModuleList([LayerNorm(config.n_embd, bias=config.bias) for _ in range(config.block_size)]),
+            positionwise_norm2s = nn.ModuleList([LayerNorm(config.n_embd, bias=config.bias) for _ in range(config.block_size)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -183,11 +190,11 @@ class TT(nn.Module):
 
     def apply_positionwise_layers(self, x):
         # x shape is (b, t, n_embd)
-        for i in reversed(range(self.config.block_size)):                           # traverse backwards to not mix future with past
-            attn_output = self.positionwise_attentions[i](x, mask)[:, i:i+1, :]     # i^th attention across all tokens
-            x[:, i:i+1, :] = self.norm1(x[:, i:i+1, :] + attn_output)               # layer norm 1
-            mlp_output = self.positionwise_mlps[i](x[:, i:i+1, :])                  # mlp
-            x[:, i:i+1, :] = self.norm2(x[:, i:i+1, :] + mlp_output)                # layer norm 2
+        for i in reversed(range(self.config.block_size)):                             # traverse backwards to not mix future with past
+            attn_output = self.transformer.positionwise_attentions[i](x)[:, i:i+1, :] # i^th attention across all tokens
+            x[:, i:i+1, :] = self.transformer.positionwise_norm1s[i](x[:, i:i+1, :] + attn_output) # layer norm 1
+            mlp_output = self.transformer.positionwise_mlps[i](x[:, i:i+1, :])        # mlp
+            x[:, i:i+1, :] = self.transformer.positionwise_norm2s[i](x[:, i:i+1, :] + mlp_output) # layer norm 2
         return x
 
     def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
