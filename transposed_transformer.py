@@ -7,6 +7,7 @@ What if we shared weights across depth instead? What could we learn?
 The transposed transformer can stack more layers than it trained with,
 just as normal transformers can read more context than they trained with.
 
+It's not autoregressive, but instead passes information all around.
 It's something like a mixture of experts, governed by attention.
 
 What are the scaling laws? What are the dynamics?
@@ -20,60 +21,58 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-class LayerNorm(nn.Module):
-    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+torch.autograd.set_detect_anomaly(True)
 
-    def __init__(self, ndim, bias):
+class PositionDependentLinear(nn.Module):
+    """ Linear but with different parameters for every token position. """
+    
+    def __init__(self, n_tokens, n_in, n_out):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(ndim))
-        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+        stdev = 1/(n_out**0.5)
+        self.W = nn.Parameter(stdev * torch.randn(n_tokens, n_in, n_out))
+        self.b = nn.Parameter(torch.zeros(n_tokens, n_out))
 
-    def forward(self, input):
-        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+    def forward(self, x):
+        # Input shape  (batch, token_pos, n_in)
+        # Output shape (batch, token_pos, n_out), where a different linear layer acts on each token_pos
+        return torch.einsum('bti,tio->bto', x, self.W) + self.b
 
-class CausalSelfAttention(nn.Module):
+class SelfAttention(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        self.c_attn = PositionDependentLinear(config.n_tokens, config.n_embd, 3 * config.n_embd)
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.c_proj = PositionDependentLinear(config.n_tokens, config.n_embd, config.n_embd)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
-        if not self.flash:
-            print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
-                                        .view(1, 1, config.block_size, config.block_size))
+        self.is_causal = config.is_causal
+        self.register_buffer("bias", torch.tril(torch.ones(config.n_tokens, config.n_tokens))
+                                    .view(1, 1, config.n_tokens, config.n_tokens))
 
     def forward(self, x):
+        return x
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
-        # calculate query, key, values for all heads in batch and move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=2)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        # calculate query, key, values for all heads in batch, then move head forward to be the batch dim
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=-1) # (T, C, C)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
 
-        # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
-        if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-        else:
-            # manual implementation of attention
-            att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
-            att = F.softmax(att, dim=-1)
-            att = self.attn_dropout(att)
-            y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
+        # manual implementation of attention
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))  # (B, nh, T, T), attention scores for all token pairs
+        if self.is_causal:
+            att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))  # mask autoregressively only if is_causal is True
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
 
         # output projection
@@ -84,15 +83,16 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
-        self.gelu    = nn.GELU()
-        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.f_in = PositionDependentLinear(config.n_tokens, config.n_embd, 4 * config.n_embd)
+        self.f_out = PositionDependentLinear(config.n_tokens, 4 * config.n_embd, config.n_embd)
+        self.gelu = nn.GELU()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        x = self.c_fc(x)
+        return x
+        x = self.f_in(x)
         x = self.gelu(x)
-        x = self.c_proj(x)
+        x = self.f_out(x)
         x = self.dropout(x)
         return x
 
@@ -100,31 +100,30 @@ class MLP(nn.Module):
 
 @dataclass
 class TTConfig:
-    block_size: int = 8     # fixed context window -- cannot be modified due to weight sharing across depth!
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+    n_tokens: int = 8       # fixed context window -- cannot be modified due to weight sharing across depth!
     n_layer: int = 4        # number of layers is variable due to weight sharing across depth!
     n_head: int = 8
     n_embd: int = 64*3
     dropout: float = 0.0
-    bias: bool = False # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    is_causal: bool = False # more natural to let all token positions communicate, so not autoregressive
 
 class TT(nn.Module):
 
     def __init__(self, config):
         super().__init__()
         assert config.vocab_size is not None
-        assert config.block_size is not None
+        assert config.n_tokens is not None
         self.config = config
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),  # token embeddings
-            wpe = nn.Embedding(config.block_size, config.n_embd),  # positional embeddings
             drop = nn.Dropout(config.dropout),
-            positionwise_mlps = nn.ModuleList([MLP(config) for _ in range(config.block_size)]),
-            positionwise_attentions = nn.ModuleList([CausalSelfAttention(config) for _ in range(config.block_size)]),
-            positionwise_norm1s = nn.ModuleList([LayerNorm(config.n_embd, bias=config.bias) for _ in range(config.block_size)]),
-            positionwise_norm2s = nn.ModuleList([LayerNorm(config.n_embd, bias=config.bias) for _ in range(config.block_size)]),
-            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+            attention = SelfAttention(config),
+            mlp = MLP(config),
+            ln_1 = nn.LayerNorm(config.n_embd, elementwise_affine=False),
+            ln_2 = nn.LayerNorm(config.n_embd, elementwise_affine=False),
+            ln_f = nn.LayerNorm(config.n_embd, elementwise_affine=False),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
@@ -143,7 +142,7 @@ class TT(nn.Module):
         # report number of parameters
         print("number of parameters: %.2fM" % (self.get_num_params()/1e6,))
 
-    def get_num_params(self, non_embedding=True):
+    def get_num_params(self):
         """
         Return the number of parameters in the model.
         For non-embedding count (default), the position embeddings get subtracted.
@@ -151,8 +150,6 @@ class TT(nn.Module):
         params are actually used as weights in the final layer, so we include them.
         """
         n_params = sum(p.numel() for p in self.parameters())
-        if non_embedding:
-            n_params -= self.transformer.wpe.weight.numel()
         return n_params
 
     def _init_weights(self, module):
@@ -166,15 +163,15 @@ class TT(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
-        assert t == self.config.block_size, f"Cannot forward sequence of length {t}, only of length block_size = {self.config.block_size}"
+        assert t == self.config.n_tokens, f"Cannot forward sequence of length {t}, only of length n_tokens = {self.config.n_tokens}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
         # forward the GPT model itself
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
-        pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
-        x = self.transformer.drop(tok_emb + pos_emb)
+        x = self.transformer.drop(tok_emb)  # no positional embeddings since every token position is already distinguished
         for _ in range(self.config.n_layer):
-            x = self.apply_positionwise_layers(x)
+            x = x + self.transformer.attention(self.transformer.ln_1(x))
+            x = x + self.transformer.mlp(self.transformer.ln_2(x))
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -188,16 +185,8 @@ class TT(nn.Module):
 
         return logits, loss
 
-    def apply_positionwise_layers(self, x):
-        # x shape is (b, t, n_embd)
-        for i in reversed(range(self.config.block_size)):                             # traverse backwards to not mix future with past
-            attn_output = self.transformer.positionwise_attentions[i](x)[:, i:i+1, :] # i^th attention across all tokens
-            x[:, i:i+1, :] = self.transformer.positionwise_norm1s[i](x[:, i:i+1, :] + attn_output) # layer norm 1
-            mlp_output = self.transformer.positionwise_mlps[i](x[:, i:i+1, :])        # mlp
-            x[:, i:i+1, :] = self.transformer.positionwise_norm2s[i](x[:, i:i+1, :] + mlp_output) # layer norm 2
-        return x
-
-    def configure_optimizers(self, weight_decay, learning_rate, betas, device_type):
+    def configure_optimizers(self, config):
+        weight_decay, learning_rate, betas = config.weight_decay, config.learning_rate, config.betas
         # start with all of the candidate parameters
         param_dict = {pn: p for pn, p in self.named_parameters()}
         # filter out those that do not require grad
@@ -215,11 +204,11 @@ class TT(nn.Module):
         print(f"num decayed parameter tensors: {len(decay_params)}, with {num_decay_params:,} parameters")
         print(f"num non-decayed parameter tensors: {len(nodecay_params)}, with {num_nodecay_params:,} parameters")
         # Create AdamW optimizer and use the fused version if it is available
-        fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
-        use_fused = fused_available and device_type == 'cuda'
-        extra_args = dict(fused=True) if use_fused else dict()
-        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas, **extra_args)
-        print(f"using fused AdamW: {use_fused}")
+        #fused_available = 'fused' in inspect.signature(torch.optim.AdamW).parameters
+        #use_fused = fused_available and device_type == 'cuda'
+        #extra_args = dict(fused=True) if use_fused else dict()
+        optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate, betas=betas)#, **extra_args)
+        #print(f"using fused AdamW: {use_fused}")
 
         return optimizer
 
@@ -229,7 +218,7 @@ class TT(nn.Module):
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
         N = self.get_num_params()
         cfg = self.config
-        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.block_size
+        L, H, Q, T = cfg.n_layer, cfg.n_head, cfg.n_embd//cfg.n_head, cfg.n_tokens
         flops_per_token = 6*N + 12*L*H*Q*T
         flops_per_fwdbwd = flops_per_token * T
         flops_per_iter = flops_per_fwdbwd * fwdbwd_per_iter
@@ -247,8 +236,8 @@ class TT(nn.Module):
         Most likely you'll want to make sure to be in model.eval() mode of operation for this.
         """
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+            # if the sequence context is growing too long we must crop it at n_tokens
+            idx_cond = idx if idx.size(1) <= self.config.n_tokens else idx[:, -self.config.n_tokens:]
             # forward the model to get the logits for the index in the sequence
             logits, _ = self(idx_cond)
             # pluck the logits at the final step and scale by desired temperature
@@ -265,3 +254,4 @@ class TT(nn.Module):
             idx = torch.cat((idx, idx_next), dim=1)
 
         return idx
+
