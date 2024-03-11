@@ -6,18 +6,20 @@ from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 
 from trainer import Trainer
-from transposed_transformer import TTConfig, TT
+from transposed_transformer import TT
+from vanilla_transformer import VanillaTransformer
 from utils import ConfigNode, set_seed, setup_logging
 
 # ---------------------------------------------------
 
 model_config = ConfigNode(
-    n_tokens=16,  # fixed context window
-    n_layer=4,    # can be changed at inference time!
-    n_head=8,     # how many self attention heads
+    n_tokens=16,  # context window (fixed when transposed)
+    n_layer=4,    # num layers (variable when transposed!)
+    n_head=2,     # num self attention heads
     n_embd=16*3,  # dimension of representation
     dropout=0.0,
-    is_causal=False,  # autoregressive modelling if True
+    is_causal=True,  # autoregressive modelling if True
+    is_transposed=False  # transposed or vanilla transformer
 )
 
 # ---------------------------------------------------
@@ -106,7 +108,8 @@ if __name__ == "__main__":
     # construct the model
     print("\n--- Instantiating Model ---\n\n\t", end="")
     config.model.vocab_size = train_dataset.get_vocab_size()
-    model = TT(config.model)
+    model_class = TT if config.model.is_transposed else VanillaTransformer
+    model = model_class(config.model)
     print("")
 
     # construct the trainer object
