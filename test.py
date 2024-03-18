@@ -15,14 +15,14 @@ from utils import ConfigNode, set_seed, setup_logging
 
 model_config = ConfigNode(
     n_tokens=16,  # context window (fixed when transposed)
-    n_layer=20,   # num layers (variable when transposed!)
+    n_layer=6,   # num layers (variable when transposed!)
     n_head=4,     # num self attention heads
     n_embd=64*3, # dimension of representation
     dropout=0.0,
     bias=False,
-    is_causal=True,  # autoregressive modelling if True
-    is_transposed=False  # transposed or vanilla transformer
+    is_transposed=True  # transposed or vanilla transformer
 )
+
 
 # ---------------------------------------------------
 
@@ -32,7 +32,7 @@ def get_config():
     # system
     config.system = ConfigNode()
     config.system.seed = 3407
-    config.system.work_dir = './out/minimal-example-all-zeros'
+    config.system.work_dir = '.out/minimal-example-all-zeros'
 
     # data
     config.data = CharDataset.get_default_config()
@@ -40,12 +40,13 @@ def get_config():
 
     # model
     config.model = model_config
+    config.model.is_causal = not config.model.is_transposed # set autoregressive iff vanilla transformer
 
     # trainer
     config.trainer = Trainer.get_default_config()
-    config.trainer.learning_rate = 5e-4 # the model we're using is so small that we can go a bit faster
+    config.trainer.learning_rate = 3e-4 # the model we're using is so small that we can go a bit faster
     config.trainer.max_iters = int(1e4)+1
-    config.trainer.batch_size = 64
+    config.trainer.batch_size = 64*config.model.n_tokens  # multiply by n_tokens to compensate for only getting loss gradients on the final next token due to non-autoregressive modeling
 
     return config
 
@@ -60,7 +61,7 @@ class CharDataset(Dataset):
         C.n_tokens = model_config.n_tokens
         return C
 
-    def __init__(self, config, data):
+    def __init__(self, config, data, is_causal=True):
         self.config = config
 
         chars = sorted(list(set(data)))
@@ -71,6 +72,7 @@ class CharDataset(Dataset):
         self.itos = { i:ch for i,ch in enumerate(chars) }
         self.vocab_size = vocab_size
         self.data = data
+        self.is_causal = is_causal
 
     def get_vocab_size(self):
         return self.vocab_size
@@ -88,7 +90,10 @@ class CharDataset(Dataset):
         dix = [self.stoi[s] for s in chunk]
         # return as tensors
         x = torch.tensor(dix[:-1], dtype=torch.long)
-        y = torch.tensor(dix[1:], dtype=torch.long)
+        y = torch.tensor(
+            dix[1:] if self.is_causal else dix[-1:],  # for non-autoregressive, train on last token only
+            dtype=torch.long
+        )
         return x, y
     
 # ---------------------------------------------------
@@ -102,7 +107,7 @@ if __name__ == "__main__":
 
     # construct the training dataset
     text = open(config.data_filepath, 'r').read()[:-1]  # remove final newline
-    train_dataset = CharDataset(config.data, text)
+    train_dataset = CharDataset(config.data, text, config.model.is_causal)
     train_dataset.config.n_tokens = model_config.n_tokens
 
     # print config details

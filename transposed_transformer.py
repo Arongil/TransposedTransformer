@@ -180,15 +180,12 @@ class TT(nn.Module):
             x = self.transformer.block(x)
         x = self.transformer.ln_f(x)
 
+        loss = None
+        logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
         if targets is not None:
-            # if we are given some desired targets also calculate the loss
-            logits = self.lm_head(x)
+            # If we are given some desired targets, also calculate the loss.
+            # For transposed transformer, because it is not autoregressive, we only train on the final next token.
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
-            # NOTE NOTE NOTE: In TT, we should ONLY calculate loss on the last token position, or in some other very special way, because we are NOT expecting autoregressive language modeling.
-        else:
-            # inference-time mini-optimization: only forward the lm_head on the very last position
-            logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
-            loss = None
 
         return logits, loss
 
