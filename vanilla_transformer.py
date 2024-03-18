@@ -16,9 +16,9 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd)
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
         # output projection
-        self.c_proj = nn.Linear(config.n_embd, config.n_embd)
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
@@ -30,14 +30,13 @@ class CausalSelfAttention(nn.Module):
                                     .view(1, 1, config.n_tokens, config.n_tokens))
 
     def forward(self, x):
-        return x
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch, then move head forward to be the batch dim
-        q, k, v  = self.c_attn(x).split(self.n_embd, dim=-1) # (T, C, C)
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(2, 3) # (B, nh, T, hs)
+        q, k, v  = self.c_attn(x).split(self.n_embd, dim=-1) # (B, T, C)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
 
         # manual implementation of attention
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))  # (B, nh, T, T), attention scores for all token pairs
@@ -56,13 +55,12 @@ class MLP(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.f_in = nn.Linear(config.n_embd, 4 * config.n_embd)
-        self.f_out = nn.Linear(config.n_embd, config.n_embd)
+        self.f_in = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.f_out = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
         self.gelu = nn.GELU()
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        return x
         x = self.f_in(x)
         x = self.gelu(x)
         x = self.f_out(x)
@@ -73,9 +71,9 @@ class Block(nn.Module):
 
     def __init__(self, config):
         super().__init__()
-        self.ln_1 = nn.LayerNorm(config.n_embd, elementwise_affine=True)
+        self.ln_1 = nn.LayerNorm(config.n_embd, elementwise_affine=False)
         self.attn = CausalSelfAttention(config)
-        self.ln_2 = nn.LayerNorm(config.n_embd, elementwise_affine=True)
+        self.ln_2 = nn.LayerNorm(config.n_embd, elementwise_affine=False)
         self.mlp = MLP(config)
 
     def forward(self, x):
@@ -86,14 +84,14 @@ class Block(nn.Module):
 ### Vanilla Transformer ###
 
 @dataclass
-class TransformerConfig:
+class VanillaTransformerConfig:
     vocab_size: int = 50304 # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     n_tokens: int = 8       # context window can be modified during inference
     n_layer: int = 4        # fixed number of layers in a vanilla transformer
     n_head: int = 8
     n_embd: int = 64*3
     dropout: float = 0.0
-    is_causal: bool = False # autoregressive modelling if True
+    is_causal: bool = True # autoregressive modelling if True
 
 class VanillaTransformer(nn.Module):
 
@@ -108,7 +106,7 @@ class VanillaTransformer(nn.Module):
             wpe = nn.Embedding(config.n_tokens, config.n_embd),
             drop = nn.Dropout(config.dropout),
             h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-            ln_f = nn.LayerNorm(config.n_embd, elementwise_affine=True),
+            ln_f = nn.LayerNorm(config.n_embd, elementwise_affine=False),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:

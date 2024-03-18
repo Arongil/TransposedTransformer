@@ -55,7 +55,6 @@ class PositionDependentSelfAttention(nn.Module):
                                     .view(1, 1, config.n_tokens, config.n_tokens))
 
     def forward(self, x):
-        return x
         B, T, C = x.size() # batch size, sequence length, embedding dimensionality (n_embd)
 
         # calculate query, key, values for all heads in batch, then move head forward to be the batch dim
@@ -87,7 +86,6 @@ class PositionDependentMLP(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
 
     def forward(self, x):
-        return x
         x = self.f_in(x)
         x = self.gelu(x)
         x = self.f_out(x)
@@ -186,6 +184,7 @@ class TT(nn.Module):
             # if we are given some desired targets also calculate the loss
             logits = self.lm_head(x)
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+            # NOTE NOTE NOTE: In TT, we should ONLY calculate loss on the last token position, or in some other very special way, because we are NOT expecting autoregressive language modeling.
         else:
             # inference-time mini-optimization: only forward the lm_head on the very last position
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
