@@ -14,15 +14,14 @@ from utils import ConfigNode, set_seed, setup_logging
 # ---------------------------------------------------
 
 model_config = ConfigNode(
-    n_tokens=16,  # context window (fixed when transposed)
+    n_tokens=128,  # context window (fixed when transposed)
     n_layer=6,   # num layers (variable when transposed!)
-    n_head=4,     # num self attention heads
-    n_embd=64*3, # dimension of representation
-    dropout=0.0,
+    n_head=6,     # num self attention heads
+    n_embd=128*3, # dimension of representation
+    dropout=0.1,
     bias=False,
-    is_transposed=True  # transposed or vanilla transformer
+    is_transposed=False  # transposed or vanilla transformer
 )
-
 
 # ---------------------------------------------------
 
@@ -45,8 +44,8 @@ def get_config():
     # trainer
     config.trainer = Trainer.get_default_config()
     config.trainer.learning_rate = 3e-4 # the model we're using is so small that we can go a bit faster
-    config.trainer.max_iters = int(1e4)+1
-    config.trainer.batch_size = 64*config.model.n_tokens  # multiply by n_tokens to compensate for only getting loss gradients on the final next token due to non-autoregressive modeling
+    config.trainer.max_iters = 2*int(1e3)+1
+    config.trainer.batch_size = 64 * (1 if config.model.is_causal else config.model.n_tokens)  # multiply by n_tokens to compensate for only getting loss gradients on the final next token due to non-autoregressive modeling
 
     return config
 
@@ -95,7 +94,7 @@ class CharDataset(Dataset):
             dtype=torch.long
         )
         return x, y
-    
+
 # ---------------------------------------------------
 
 if __name__ == "__main__":
@@ -149,7 +148,7 @@ if __name__ == "__main__":
             torch.save(model.state_dict(), ckpt_path)
             # revert model to training mode
             model.train()
-    
+
     trainer.set_callback('on_batch_end', batch_end_callback)
 
     # run the optimization
