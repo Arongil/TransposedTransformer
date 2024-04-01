@@ -4,6 +4,7 @@ import sys
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
+import wandb
 
 from trainer import Trainer
 from transposed_transformer import TT
@@ -14,13 +15,13 @@ from utils import ConfigNode, set_seed, setup_logging
 # ---------------------------------------------------
 
 model_config = ConfigNode(
-    n_tokens=128,  # context window (fixed when transposed)
+    n_tokens=32,  # context window (fixed when transposed)
     n_layer=6,   # num layers (variable when transposed!)
     n_head=6,     # num self attention heads
-    n_embd=128*3, # dimension of representation
+    n_embd=32*3, # dimension of representation
     dropout=0.1,
     bias=False,
-    is_transposed=False  # transposed or vanilla transformer
+    is_transposed=True  # transposed or vanilla transformer
 )
 
 # ---------------------------------------------------
@@ -44,7 +45,7 @@ def get_config():
     # trainer
     config.trainer = Trainer.get_default_config()
     config.trainer.learning_rate = 3e-4 # the model we're using is so small that we can go a bit faster
-    config.trainer.max_iters = 2*int(1e3)+1
+    config.trainer.max_iters = 1*int(1e3)+1
     config.trainer.batch_size = 64 * (1 if config.model.is_causal else config.model.n_tokens)  # multiply by n_tokens to compensate for only getting loss gradients on the final next token due to non-autoregressive modeling
 
     return config
@@ -121,11 +122,22 @@ if __name__ == "__main__":
     model = model_class(config.model)
     print("")
 
+    # init Weights & Biases
+    wandb.init(
+        project="Transposed Transformer",
+        entity="lakernewhouse",
+        config=config.to_dict()
+    )
+
     # construct the trainer object
     trainer = Trainer(config.trainer, model, train_dataset)
 
     # iteration callback
     def batch_end_callback(trainer):
+
+        # Weights & Biases: record loss, activation norm (by depth), gradient norm (by depth)
+        #activation_norm = trainer.model.parameters
+        wandb.log({"loss": trainer.loss.item()})
 
         if trainer.iter_num % 20 == 0:
             print(f"iter_dt {trainer.iter_dt * 1000:.2f}ms; iter {trainer.iter_num}: train loss {trainer.loss.item():.5f}")

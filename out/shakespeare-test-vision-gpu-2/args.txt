@@ -1,0 +1,1 @@
+test.py --data_filepath=data/shakespeare_char/input.txt --system.work_dir=out/shakespeare-test-vision-gpu-2

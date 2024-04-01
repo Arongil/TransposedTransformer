@@ -1,0 +1,57 @@
+Running on device cuda
+num decayed parameter tensors: 9, with 3,572,832 parameters
+num non-decayed parameter tensors: 0, with 0 parameters
+iter_dt 0.00ms; iter 0: train loss 4.21822
+saving model
+iter_dt 99.18ms; iter 20: train loss 3.60939
+iter_dt 101.98ms; iter 40: train loss 3.32036
+iter_dt 99.19ms; iter 60: train loss 3.09334
+iter_dt 99.24ms; iter 80: train loss 2.88715
+iter_dt 99.13ms; iter 100: train loss 2.77973
+iter_dt 99.30ms; iter 120: train loss 2.65498
+iter_dt 99.16ms; iter 140: train loss 2.53983
+iter_dt 99.76ms; iter 160: train loss 2.48439
+iter_dt 99.85ms; iter 180: train loss 2.44183
+iter_dt 99.58ms; iter 200: train loss 2.44129
+iter_dt 99.15ms; iter 220: train loss 2.36899
+iter_dt 99.46ms; iter 240: train loss 2.32111
+iter_dt 99.39ms; iter 260: train loss 2.28749
+iter_dt 99.66ms; iter 280: train loss 2.26488
+iter_dt 99.23ms; iter 300: train loss 2.23846
+iter_dt 99.18ms; iter 320: train loss 2.21632
+iter_dt 99.15ms; iter 340: train loss 2.19321
+iter_dt 99.41ms; iter 360: train loss 2.17021
+iter_dt 99.41ms; iter 380: train loss 2.22750
+iter_dt 99.17ms; iter 400: train loss 2.16695
+iter_dt 99.23ms; iter 420: train loss 2.15065
+iter_dt 99.07ms; iter 440: train loss 2.13789
+iter_dt 99.27ms; iter 460: train loss 2.15519
+iter_dt 99.21ms; iter 480: train loss 2.13717
+iter_dt 99.30ms; iter 500: train loss 2.03692
+saving model
+iter_dt 100.40ms; iter 520: train loss 2.03788
+iter_dt 99.57ms; iter 540: train loss 2.04704
+iter_dt 99.28ms; iter 560: train loss 1.97390
+iter_dt 99.48ms; iter 580: train loss 2.06568
+iter_dt 99.61ms; iter 600: train loss 2.02872
+iter_dt 99.39ms; iter 620: train loss 2.02735
+iter_dt 99.20ms; iter 640: train loss 1.96638
+iter_dt 99.26ms; iter 660: train loss 2.03694
+iter_dt 99.33ms; iter 680: train loss 1.99944
+iter_dt 99.16ms; iter 700: train loss 2.00292
+iter_dt 99.36ms; iter 720: train loss 1.96020
+iter_dt 99.40ms; iter 740: train loss 1.95700
+iter_dt 99.47ms; iter 760: train loss 1.95306
+iter_dt 99.74ms; iter 780: train loss 1.90811
+iter_dt 99.89ms; iter 800: train loss 1.93403
+iter_dt 99.45ms; iter 820: train loss 1.92161
+iter_dt 99.41ms; iter 840: train loss 1.91673
+iter_dt 100.06ms; iter 860: train loss 1.93288
+iter_dt 99.51ms; iter 880: train loss 1.88112
+iter_dt 100.20ms; iter 900: train loss 1.89665
+iter_dt 100.26ms; iter 920: train loss 1.89704
+iter_dt 100.44ms; iter 940: train loss 1.93104
+iter_dt 99.89ms; iter 960: train loss 1.85823
+iter_dt 99.55ms; iter 980: train loss 1.85252
+iter_dt 99.55ms; iter 1000: train loss 1.82197
+saving model
